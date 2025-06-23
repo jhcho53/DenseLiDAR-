@@ -49,14 +49,15 @@ def main(model_path, image_path, sparse_path, pseudo_depth_map_path, output_path
     pseudo_depth_map = load_another_data(pseudo_depth_map_path)
 
     model = DenseLiDAR(bs=1).cuda()
-    
+
     checkpoint = torch.load(model_path)
     state_dict = remove_module_prefix(checkpoint['model_state_dict'])
     model.load_state_dict(state_dict)
     model.eval()
-    
+
     with torch.no_grad():
-        final_dense_depth = model(image, sparse, pseudo_depth_map, 'cuda')
+        residual = model(image, sparse, pseudo_depth_map, 'cuda')  # now returns residual only
+        final_dense_depth = pseudo_depth_map + residual  # manually compute corrected depth
 
     final_dense_depth = final_dense_depth.cpu()
     save_depth_map(final_dense_depth, output_path)

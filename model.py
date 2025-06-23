@@ -11,11 +11,11 @@ class DenseLiDAR(Module):
         self.DCU = depthCompletionNew_blockN(bs)
 
     def forward(self, image, sparse, pseudo_depth_map, device):
-        rectified_depth = self.rectification(sparse, pseudo_depth_map)
-        normal2, concat2 = self.DCU(image, pseudo_depth_map, rectified_depth)
-        
-        residual = normal2 - sparse
-        residual = torch.clamp(residual, min=0)
-        final_dense_depth = pseudo_depth_map + residual
+        # mask: where sparse points exist
+        mask = (sparse > 0).float()
 
-        return final_dense_depth
+        # DCU 예측
+        rectified_depth = self.rectification(sparse, pseudo_depth_map)
+        residual, concat2 = self.DCU(image, pseudo_depth_map, rectified_depth)  # normal2: [B, 1, H, W]
+
+        return residual

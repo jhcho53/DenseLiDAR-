@@ -1,6 +1,8 @@
 import os
 import shutil
+import sys
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
 from submodules.utils.get_func import get_inner_folder
 
 

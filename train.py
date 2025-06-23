@@ -68,9 +68,10 @@ def train(image, gt, sparse, pseudo_depth_map, pseudo_gt_map, model, optimizer, 
     
     optimizer.zero_grad()
 
-    dense_depth = model(image, sparse, pseudo_depth_map, device)
+    pred_residual = model(image, sparse, pseudo_depth_map, device)
+    pred_depth = pseudo_depth_map + pred_residual
 
-    t_loss, s_loss, d_loss = total_loss(pseudo_gt_map, gt, dense_depth)
+    t_loss, s_loss, d_loss = total_loss(pseudo_gt_map, gt, pred_depth)
     t_loss.backward()
 
     optimizer.step()
@@ -91,9 +92,10 @@ def validate(image, gt, sparse, pseudo_depth_map, pseudo_gt_map, model, device, 
         if args.cuda:
             image, gt, sparse, pseudo_depth_map, pseudo_gt_map = image.cuda(), gt.cuda(), sparse.cuda(), pseudo_depth_map.cuda(), pseudo_gt_map.cuda()
         
-        dense_depth = model(image, sparse, pseudo_depth_map, device)
+        pred_residual = model(image, sparse, pseudo_depth_map, device)
+        pred_depth = pseudo_depth_map + pred_residual
         
-        t_loss, s_loss, d_loss = total_loss(pseudo_gt_map, gt, dense_depth)
+        t_loss, s_loss, d_loss = total_loss(pseudo_gt_map, gt, pred_depth)
 
     return t_loss, s_loss, d_loss
 

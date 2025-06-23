@@ -7,3 +7,5 @@ submodules/loss/__pycache__/
 submodules/utils/__pycache__/
 dataloader/__pycache__/
 runs/
+eval_out/
+sample/
