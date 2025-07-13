@@ -4,6 +4,37 @@ import torch.nn as nn
 import math
 from submodules.utils.utils_dcu import *
 
+class MG_CBAM(nn.Module):
+    """Mask-Guided CBAM for depth completion"""
+    def __init__(self, channels):
+        super().__init__()
+        # Channel attention
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Conv2d(channels, channels//4, 1, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channels//4, channels, 1, bias=False)
+        )
+        # Spatial attention
+        self.spatial = nn.Conv2d(4, 1, kernel_size=7, padding=3, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        # Channel attention
+        avg_out = self.fc(self.avg_pool(x))
+        max_out = self.fc(self.max_pool(x))
+        ca = self.sigmoid(avg_out + max_out)
+        x_ca = x * ca
+        # Spatial attention (guidance from two pooled maps)
+        avg_pool = torch.mean(x_ca, dim=1, keepdim=True)
+        max_pool, _ = torch.max(x_ca, dim=1, keepdim=True)
+        # Replicate pools to match expected input channels
+        spa_in = torch.cat([avg_pool, max_pool, avg_pool, max_pool], dim=1)
+        sa = self.sigmoid(self.spatial(spa_in))
+        out = x_ca * sa
+        return out
+    
 class UpProject(nn.Module):
 
     def __init__(self, in_channels, out_channels, batch_size):
@@ -99,11 +130,110 @@ class ResBlock(nn.Module):
 
         return out
 
+# class depthCompletionNew_blockN(nn.Module):
+#     def __init__(self, bs):
+#         super(depthCompletionNew_blockN, self).__init__()
+#         self.bs = bs
+
+#         self.convS = ResBlock(2, 32, 1)
+#         self.convS0 = ResBlock(32, 97, 1)
+#         self.convS1 = ResBlock(97, 193, 2)
+#         self.convS2 = ResBlock(193, 385, 2)
+#         self.convS3 = ResBlock(385, 513, 2)
+#         self.convS4 = ResBlock(513, 512, 2)
+
+#         self.conv1 = ResBlock(3, 32, 1)
+#         self.conv2 = ResBlock(32, 64, 1)
+#         self.conv3 = ResBlock(64, 128, 2)
+#         self.conv3_1 = ResBlock(128, 128, 1)
+#         self.conv4 = ResBlock(128, 256, 2)
+#         self.conv4_1 = ResBlock(256, 256, 1)
+#         self.conv5 = ResBlock(256, 256, 2)
+#         self.conv5_1 = ResBlock(256, 256, 1)
+#         self.conv6 = ResBlock(256, 512, 2)
+#         self.conv6_1 = ResBlock(512, 512, 1)
+
+#         self.deconv5 = self._make_upproj_layer(UpProject, 512, 256, self.bs)
+#         self.deconv4 = self._make_upproj_layer(UpProject, 513, 128, self.bs)
+#         self.deconv3 = self._make_upproj_layer(UpProject, 385, 64, self.bs)
+#         self.deconv2 = self._make_upproj_layer(UpProject, 193, 32, self.bs)
+
+#         self.predict_normal6 = predict_normal(512)
+#         self.predict_normal5 = predict_normal(513)
+#         self.predict_normal4 = predict_normal(385)
+#         self.predict_normal3 = predict_normal(193)
+#         self.predict_normal2 = predict_normalE2(97)
+
+#         self.upsampled_normal6_to_5 = nn.ConvTranspose2d(1, 1, 4, 2, 1, bias=False)
+#         self.upsampled_normal5_to_4 = nn.ConvTranspose2d(1, 1, 4, 2, 1, bias=False)
+#         self.upsampled_normal4_to_3 = nn.ConvTranspose2d(1, 1, 4, 2, 1, bias=False)
+#         self.upsampled_normal3_to_2 = nn.ConvTranspose2d(1, 1, 4, 2, 1, bias=False)
+
+#         for m in self.modules():
+#             if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
+#                 n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+#                 m.weight.data.normal_(0, math.sqrt(2. / n))
+#                 if m.bias is not None:
+#                     m.bias.data.zero_()
+#             elif isinstance(m, nn.BatchNorm2d):
+#                 m.weight.data.fill_(1)
+#                 m.bias.data.zero_()
+
+#     def _make_upproj_layer(self,block,in_channels,out_channels,bs):
+#         return block(in_channels,out_channels,bs)
+
+#     def forward(self, left, sparse2, mask):
+#         inputM = mask
+#         inputS = torch.cat((sparse2, inputM), 1)
+#         inputS_conv = self.convS(inputS)
+#         input1 = inputS_conv
+#         inputS_conv0 = self.convS0(input1)
+#         inputS_conv1 = self.convS1(inputS_conv0)
+#         inputS_conv2 = self.convS2(inputS_conv1)
+#         inputS_conv3 = self.convS3(inputS_conv2)
+#         inputS_conv4 = self.convS4(inputS_conv3)
+
+#         input2 = left
+#         out_conv2 = self.conv2(self.conv1(input2))
+#         out_conv3 = self.conv3_1(self.conv3(out_conv2))
+#         out_conv4 = self.conv4_1(self.conv4(out_conv3))
+#         out_conv5 = self.conv5_1(self.conv5(out_conv4))
+#         out_conv6 = self.conv6_1(self.conv6(out_conv5))+inputS_conv4
+
+#         out6 = self.predict_normal6(out_conv6)
+#         normal6_up = self.upsampled_normal6_to_5(out6)
+#         out_deconv5 = self.deconv5(out_conv6)
+
+#         concat5 = adaptative_cat(out_conv5, out_deconv5, normal6_up)+inputS_conv3
+#         out5 = self.predict_normal5(concat5)
+#         normal5_up = self.upsampled_normal5_to_4(out5)
+#         out_deconv4 = self.deconv4(concat5)
+
+#         concat4 = adaptative_cat(out_conv4, out_deconv4, normal5_up)+inputS_conv2
+#         out4 = self.predict_normal4(concat4)
+#         normal4_up = self.upsampled_normal4_to_3(out4)
+#         out_deconv3 = self.deconv3(concat4)
+
+#         concat3 = adaptative_cat(out_conv3, out_deconv3, normal4_up)+inputS_conv1
+#         out3 = self.predict_normal3(concat3)
+#         normal3_up = self.upsampled_normal3_to_2(out3)
+#         out_deconv2 = self.deconv2(concat3)
+
+#         concat2 = adaptative_cat(out_conv2, out_deconv2, normal3_up)+inputS_conv0
+#         out2 = self.predict_normal2(concat2)
+#         normal2 = out2
+
+#         normal2 = normal2[:,1,:,:]
+#         normal2 = normal2.unsqueeze(1)
+
+#         return normal2, concat2
+    
 class depthCompletionNew_blockN(nn.Module):
     def __init__(self, bs):
         super(depthCompletionNew_blockN, self).__init__()
         self.bs = bs
 
+        # Sparse branch
         self.convS = ResBlock(2, 32, 1)
         self.convS0 = ResBlock(32, 97, 1)
         self.convS1 = ResBlock(97, 193, 2)
@@ -111,6 +241,7 @@ class depthCompletionNew_blockN(nn.Module):
         self.convS3 = ResBlock(385, 513, 2)
         self.convS4 = ResBlock(513, 512, 2)
 
+        # RGB branch
         self.conv1 = ResBlock(3, 32, 1)
         self.conv2 = ResBlock(32, 64, 1)
         self.conv3 = ResBlock(64, 128, 2)
@@ -122,22 +253,33 @@ class depthCompletionNew_blockN(nn.Module):
         self.conv6 = ResBlock(256, 512, 2)
         self.conv6_1 = ResBlock(512, 512, 1)
 
-        self.deconv5 = self._make_upproj_layer(UpProject, 512, 256, self.bs)
-        self.deconv4 = self._make_upproj_layer(UpProject, 513, 128, self.bs)
-        self.deconv3 = self._make_upproj_layer(UpProject, 385, 64, self.bs)
-        self.deconv2 = self._make_upproj_layer(UpProject, 193, 32, self.bs)
+        # MG-CBAM blocks for each level fusion
+        self.cbam6 = MG_CBAM(512)
+        self.cbam5 = MG_CBAM(513)
+        self.cbam4 = MG_CBAM(385)
+        self.cbam3 = MG_CBAM(193)
+        self.cbam2 = MG_CBAM(97)
 
+        # Upsampling proj
+        self.deconv5 = self._make_upproj_layer(UpProject, 512, 256, bs)
+        self.deconv4 = self._make_upproj_layer(UpProject, 513, 128, bs)
+        self.deconv3 = self._make_upproj_layer(UpProject, 385, 64, bs)
+        self.deconv2 = self._make_upproj_layer(UpProject, 193, 32, bs)
+
+        # Prediction heads
         self.predict_normal6 = predict_normal(512)
         self.predict_normal5 = predict_normal(513)
         self.predict_normal4 = predict_normal(385)
         self.predict_normal3 = predict_normal(193)
         self.predict_normal2 = predict_normalE2(97)
 
+        # Upsample layers for normals
         self.upsampled_normal6_to_5 = nn.ConvTranspose2d(1, 1, 4, 2, 1, bias=False)
         self.upsampled_normal5_to_4 = nn.ConvTranspose2d(1, 1, 4, 2, 1, bias=False)
         self.upsampled_normal4_to_3 = nn.ConvTranspose2d(1, 1, 4, 2, 1, bias=False)
         self.upsampled_normal3_to_2 = nn.ConvTranspose2d(1, 1, 4, 2, 1, bias=False)
 
+        # Weight initialization
         for m in self.modules():
             if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
                 n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
@@ -148,51 +290,61 @@ class depthCompletionNew_blockN(nn.Module):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
 
-    def _make_upproj_layer(self,block,in_channels,out_channels,bs):
-        return block(in_channels,out_channels,bs)
+    def _make_upproj_layer(self, block, in_channels, out_channels, bs):
+        return block(in_channels, out_channels, bs)
 
     def forward(self, left, sparse2, mask):
+        # Sparse path with mask guidance
         inputM = mask
         inputS = torch.cat((sparse2, inputM), 1)
-        inputS_conv = self.convS(inputS)
-        input1 = inputS_conv
-        inputS_conv0 = self.convS0(input1)
-        inputS_conv1 = self.convS1(inputS_conv0)
-        inputS_conv2 = self.convS2(inputS_conv1)
-        inputS_conv3 = self.convS3(inputS_conv2)
-        inputS_conv4 = self.convS4(inputS_conv3)
+        s0 = self.convS(inputS)
+        s1 = self.convS0(s0)
+        s2 = self.convS1(s1)
+        s3 = self.convS2(s2)
+        s4 = self.convS3(s3)
+        s5 = self.convS4(s4)
 
-        input2 = left
-        out_conv2 = self.conv2(self.conv1(input2))
-        out_conv3 = self.conv3_1(self.conv3(out_conv2))
-        out_conv4 = self.conv4_1(self.conv4(out_conv3))
-        out_conv5 = self.conv5_1(self.conv5(out_conv4))
-        out_conv6 = self.conv6_1(self.conv6(out_conv5))+inputS_conv4
+        # RGB path
+        x1 = self.conv1(left)
+        x2 = self.conv2(x1)
+        x3 = self.conv3_1(self.conv3(x2))
+        x4 = self.conv4_1(self.conv4(x3))
+        x5 = self.conv5_1(self.conv5(x4))
+        x6 = self.conv6_1(self.conv6(x5))
 
-        out6 = self.predict_normal6(out_conv6)
-        normal6_up = self.upsampled_normal6_to_5(out6)
-        out_deconv5 = self.deconv5(out_conv6)
+        # Level 6 fusion + CBAM
+        feat6 = x6 + s5
+        feat6 = self.cbam6(feat6)
+        out6 = self.predict_normal6(feat6)
+        up6 = self.upsampled_normal6_to_5(out6)
+        d5 = self.deconv5(feat6)
 
-        concat5 = adaptative_cat(out_conv5, out_deconv5, normal6_up)+inputS_conv3
-        out5 = self.predict_normal5(concat5)
-        normal5_up = self.upsampled_normal5_to_4(out5)
-        out_deconv4 = self.deconv4(concat5)
+        # Level 5 fusion + CBAM
+        c5 = adaptative_cat(x5, d5, up6) + s4
+        c5 = self.cbam5(c5)
+        out5 = self.predict_normal5(c5)
+        up5 = self.upsampled_normal5_to_4(out5)
+        d4 = self.deconv4(c5)
 
-        concat4 = adaptative_cat(out_conv4, out_deconv4, normal5_up)+inputS_conv2
-        out4 = self.predict_normal4(concat4)
-        normal4_up = self.upsampled_normal4_to_3(out4)
-        out_deconv3 = self.deconv3(concat4)
+        # Level 4 fusion + CBAM
+        c4 = adaptative_cat(x4, d4, up5) + s3
+        c4 = self.cbam4(c4)
+        out4 = self.predict_normal4(c4)
+        up4 = self.upsampled_normal4_to_3(out4)
+        d3 = self.deconv3(c4)
 
-        concat3 = adaptative_cat(out_conv3, out_deconv3, normal4_up)+inputS_conv1
-        out3 = self.predict_normal3(concat3)
-        normal3_up = self.upsampled_normal3_to_2(out3)
-        out_deconv2 = self.deconv2(concat3)
+        # Level 3 fusion + CBAM
+        c3 = adaptative_cat(x3, d3, up4) + s2
+        c3 = self.cbam3(c3)
+        out3 = self.predict_normal3(c3)
+        up3 = self.upsampled_normal3_to_2(out3)
+        d2 = self.deconv2(c3)
 
-        concat2 = adaptative_cat(out_conv2, out_deconv2, normal3_up)+inputS_conv0
-        out2 = self.predict_normal2(concat2)
-        normal2 = out2
+        # Level 2 fusion + CBAM
+        c2 = adaptative_cat(x2, d2, up3) + s1
+        c2 = self.cbam2(c2)
+        out2 = self.predict_normal2(c2)
 
-        normal2 = normal2[:,1,:,:]
-        normal2 = normal2.unsqueeze(1)
-
-        return normal2, concat2
+        # Final residual
+        normal2 = out2[:, 1:2, :, :]
+        return normal2, c2

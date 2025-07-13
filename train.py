@@ -71,12 +71,12 @@ def train(image, gt, sparse, pseudo_depth_map, pseudo_gt_map, model, optimizer, 
     pred_residual = model(image, sparse, pseudo_depth_map, device)
     pred_depth = pseudo_depth_map + pred_residual
 
-    t_loss, s_loss, d_loss = total_loss(pseudo_gt_map, gt, pred_depth)
+    t_loss, s_loss, d_loss, e_loss = total_loss(pseudo_gt_map, gt, pred_depth)
     t_loss.backward()
 
     optimizer.step()
 
-    return t_loss, s_loss, d_loss
+    return t_loss, s_loss, d_loss, e_loss
 
 
 def validate(image, gt, sparse, pseudo_depth_map, pseudo_gt_map, model, device, args):
@@ -95,9 +95,9 @@ def validate(image, gt, sparse, pseudo_depth_map, pseudo_gt_map, model, device, 
         pred_residual = model(image, sparse, pseudo_depth_map, device)
         pred_depth = pseudo_depth_map + pred_residual
         
-        t_loss, s_loss, d_loss = total_loss(pseudo_gt_map, gt, pred_depth)
+        t_loss, s_loss, d_loss, e_loss = total_loss(pseudo_gt_map, gt, pred_depth)
 
-    return t_loss, s_loss, d_loss
+    return t_loss, s_loss, d_loss, e_loss
 
 
 def main(rank, world_size, args):
@@ -149,7 +149,7 @@ def main(rank, world_size, args):
     )
 
     model = DenseLiDAR(batch_size).to(rank)
-    model = DDP(model, device_ids=[rank])
+    model = DDP(model, device_ids=[rank], find_unused_parameters=True)
 
     optimizer = AdamW(model.parameters(), lr=0.001, weight_decay=1e-2)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-7, last_epoch=-1)
@@ -166,47 +166,52 @@ def main(rank, world_size, args):
         total_train_loss = 0
         total_train_s_loss = 0
         total_train_d_loss = 0
+        total_train_e_loss = 0
 
         total_val_loss = 0
         total_val_s_loss = 0
         total_val_d_loss = 0
-
+        total_val_e_loss = 0
         TrainImgLoader.sampler.set_epoch(epoch)
 
         ## training ##
         print("[Training]")
         for batch_idx, (image, gt, sparse, pseudo_depth_map, pseudo_gt_map) in tqdm(
                 enumerate(TrainImgLoader), total=len(TrainImgLoader), desc=f"Epoch {epoch}"):
-            train_loss, train_s_loss, train_d_loss = train(image, gt, sparse, pseudo_depth_map, pseudo_gt_map, model, optimizer, rank, args)
+            train_loss, train_s_loss, train_d_loss, train_e_loss = train(image, gt, sparse, pseudo_depth_map, pseudo_gt_map, model, optimizer, rank, args)
             
             total_train_loss += train_loss
             total_train_s_loss += train_s_loss
             total_train_d_loss += train_d_loss
+            total_train_e_loss += train_e_loss
             
         avg_train_loss = total_train_loss / len(TrainImgLoader)
         avg_train_s_loss = total_train_s_loss / len(TrainImgLoader)
         avg_train_d_loss = total_train_d_loss / len(TrainImgLoader)
+        avg_train_e_loss = total_train_e_loss / len(TrainImgLoader)
 
         print('Epoch %d total training loss = %.10f' % (epoch, avg_train_loss))
-        print('Epoch %d training structural loss = %.10f, training depth loss = %.10f' % (epoch, avg_train_s_loss, avg_train_d_loss))
+        print('Epoch %d training structural loss = %.10f, training depth loss = %.10f, training edge loss = %.10f' % (epoch, avg_train_s_loss, avg_train_d_loss, avg_train_e_loss))
         print()
 
         ## validation ##
         print("[Validation]")
         for batch_idx, (image, gt, sparse, pseudo_depth_map, pseudo_gt_map) in tqdm(
                 enumerate(ValImgLoader), total=len(ValImgLoader), desc=f"Epoch {epoch}"):
-            val_loss, val_s_loss, val_d_loss = validate(image, gt, sparse, pseudo_depth_map, pseudo_gt_map, model, rank, args)
+            val_loss, val_s_loss, val_d_loss, val_e_loss = validate(image, gt, sparse, pseudo_depth_map, pseudo_gt_map, model, rank, args)
             
             total_val_loss += val_loss
             total_val_s_loss += val_s_loss
             total_val_d_loss += val_d_loss
+            total_val_e_loss += val_e_loss
 
         avg_val_loss = total_val_loss / len(ValImgLoader)
         avg_val_s_loss = total_val_s_loss / len(ValImgLoader)
         avg_val_d_loss = total_val_d_loss / len(ValImgLoader)
+        avg_val_e_loss = total_val_e_loss / len(ValImgLoader)
 
         print('Epoch %d total validation loss = %.10f' % (epoch, avg_val_loss))
-        print('Epoch %d validation structural loss = %.10f, validation depth loss = %.10f' % (epoch, avg_val_s_loss, avg_val_d_loss))
+        print('Epoch %d validation structural loss = %.10f, validation depth loss = %.10f, validation edge loss = %.10f' % (epoch, avg_val_s_loss, avg_val_d_loss, avg_val_e_loss))
         print()
         
         if rank == 0:

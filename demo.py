@@ -38,9 +38,14 @@ def remove_module_prefix(state_dict):
 
 
 def save_depth_map(dense_depth, output_path):
-    dense_depth = dense_depth.squeeze().cpu().numpy()
-    dense_depth = (dense_depth * 256).astype(np.uint16)
-    cv2.imwrite(output_path, dense_depth)
+    # 1) Tensor → numpy (H×W)  
+    depth = dense_depth.squeeze().cpu().numpy().astype(np.float32)
+    # 2) 0–255 범위로 정규화 후 8비트로 변환  
+    disp = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    # 3) JET 컬러맵 적용  
+    jet = cv2.applyColorMap(disp, cv2.COLORMAP_JET)
+    # 4) 파일로 저장  
+    cv2.imwrite(output_path, jet)
 
 
 def main(model_path, image_path, sparse_path, pseudo_depth_map_path, output_path):

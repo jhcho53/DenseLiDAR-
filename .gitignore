@@ -9,3 +9,4 @@ dataloader/__pycache__/
 runs/
 eval_out/
 sample/
+check_eval/
